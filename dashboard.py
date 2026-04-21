@@ -223,11 +223,7 @@ with col_org:
 if selected_org != "All":
     df = df[df["responsible_org"] == selected_org]
 
-st.caption(f"🔍 DEBUG — {len(df)} issues loaded")
-with st.expander("🔍 DEBUG — field values"):
-    st.write("Statuses:", sorted(df["status"].unique().tolist()))
-    st.write("Issue types:", sorted(df["issue_type"].unique().tolist()))
-    st.write("Stage found:", sorted(df["stage_found"].unique().tolist()))
+st.caption(f"{len(df)} issues loaded")
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 RESOLVED_STATUSES = {"Closed", "Cancelled", "Rejected", "Deferred"}

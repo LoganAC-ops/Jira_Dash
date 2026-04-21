@@ -3,16 +3,26 @@ from datetime import date, datetime
 
 import pandas as pd
 import requests
+import streamlit as st
 from dotenv import load_dotenv
 from requests.auth import HTTPBasicAuth
 
 load_dotenv()
 
-JIRA_BASE_URL = os.getenv("JIRA_BASE_URL")
-JIRA_EMAIL = os.getenv("JIRA_EMAIL")
-JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
-PROJECT_KEY = os.getenv("JIRA_PROJECT_KEY")
-FILTER_ID = os.getenv("JIRA_FILTER_ID")
+
+def _cfg(key: str) -> str:
+    """Read from Streamlit secrets first, fall back to environment variables."""
+    try:
+        return st.secrets[key]
+    except (KeyError, AttributeError, Exception):
+        return os.getenv(key)
+
+
+JIRA_BASE_URL = _cfg("JIRA_BASE_URL")
+JIRA_EMAIL    = _cfg("JIRA_EMAIL")
+JIRA_API_TOKEN = _cfg("JIRA_API_TOKEN")
+PROJECT_KEY   = _cfg("JIRA_PROJECT_KEY")
+FILTER_ID     = _cfg("JIRA_FILTER_ID")
 
 # ── Custom field mappings ─────────────────────────────────────────────────────
 # Replace the placeholder IDs with the real ones from your Jira instance.
