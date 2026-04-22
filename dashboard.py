@@ -19,25 +19,25 @@ st.markdown(
         /* ── Header ── */
         .main-header {
             background: linear-gradient(120deg, #1a0533 0%, #2d0b55 100%);
-            padding: 0.85rem 1.6rem;
-            border-radius: 8px;
-            margin-bottom: 0.6rem;
+            padding: 0.5rem 1.4rem;
+            border-radius: 6px;
+            margin-bottom: 0.5rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-left: 5px solid #A100FF;
+            border-left: 4px solid #A100FF;
         }
         .header-left h1 {
             color: #ffffff;
-            font-size: 1.55rem;
+            font-size: 1.1rem;
             font-weight: 700;
             margin: 0;
             letter-spacing: -.01em;
         }
         .header-left p {
             color: #c9a8f0;
-            font-size: 0.82rem;
-            margin: 0.35rem 0 0;
+            font-size: 0.72rem;
+            margin: 0.15rem 0 0;
             letter-spacing: .02em;
         }
         .header-right {
@@ -47,7 +47,7 @@ st.markdown(
         .brand-mdlz {
             display: block;
             color: #e8d5ff;
-            font-size: 0.95rem;
+            font-size: 0.75rem;
             font-weight: 700;
             letter-spacing: .06em;
             text-transform: uppercase;
@@ -55,7 +55,7 @@ st.markdown(
         .brand-acc {
             display: block;
             color: #A100FF;
-            font-size: 0.95rem;
+            font-size: 0.75rem;
             font-weight: 700;
             letter-spacing: .06em;
             text-transform: uppercase;
@@ -63,10 +63,10 @@ st.markdown(
         .brand-label {
             display: block;
             color: #9b72cf;
-            font-size: 0.68rem;
+            font-size: 0.62rem;
             letter-spacing: .08em;
             text-transform: uppercase;
-            margin-top: .15rem;
+            margin-top: .1rem;
         }
         /* ── KPI tiles ── */
         .kpi-card {
@@ -110,8 +110,8 @@ st.markdown(
         .priority-table th {
             background: #2d0b55;
             color: #e8d5ff;
-            padding: .55rem 1.2rem;
-            font-size: .75rem;
+            padding: .75rem 1.5rem;
+            font-size: .85rem;
             font-weight: 600;
             letter-spacing: .06em;
             text-transform: uppercase;
@@ -120,9 +120,9 @@ st.markdown(
         .priority-table th:last-child  { border-radius: 0 6px 0 0; }
         .priority-table th             { text-align: center; }
         .priority-table td {
-            padding: .6rem 1.2rem;
+            padding: .9rem 1.5rem;
             text-align: center;
-            font-size: 1rem;
+            font-size: 1.2rem;
             font-weight: 600;
             border-bottom: 1px solid #ede5f7;
             background: #ffffff;
@@ -211,19 +211,17 @@ if df.empty:
     st.stop()
 
 # ── Toolbar: refresh + org filter ────────────────────────────────────────────
-col_refresh, col_ts, col_org = st.columns([1, 2, 3], vertical_alignment="bottom")
+col_refresh, col_meta, col_org = st.columns([1, 3, 3], vertical_alignment="bottom")
 with col_refresh:
     if st.button("🔄 Refresh", use_container_width=True):
         refresh_data()
-with col_ts:
-    st.caption(f"Last refreshed: {st.session_state['last_refresh']}")
+with col_meta:
+    st.caption(f"{len(df)} issues loaded · Last refreshed: {st.session_state['last_refresh']}")
 with col_org:
     all_orgs = ["All"] + sorted(df["responsible_org"].dropna().unique().tolist())
     selected_org = st.selectbox("Responsible Organization", options=all_orgs)
 if selected_org != "All":
     df = df[df["responsible_org"] == selected_org]
-
-st.caption(f"{len(df)} issues loaded")
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 RESOLVED_STATUSES = {"Closed", "Cancelled", "Rejected", "Deferred"}
@@ -242,26 +240,26 @@ with tab1:
     n_resolved     = int(df["status"].isin(RESOLVED_STATUSES).sum())
     n_backlog      = int((~df["status"].isin(RESOLVED_STATUSES)).sum())
 
-    today_label     = today.strftime("%b %#d")
-    yest_label      = (today - timedelta(days=1)).strftime("%b %#d")
+    yest_label = (today - timedelta(days=1)).strftime("%b %#d")
+
+    if n_new_today < n_new_yest:
+        arrow, arrow_color = "▼", "#2e7d32"
+    elif n_new_today > n_new_yest:
+        arrow, arrow_color = "▲", "#c62828"
+    else:
+        arrow, arrow_color = "●", "#9b72cf"
 
     kpi_left, kpi_mid, kpi_right = st.columns(3, gap="large")
 
     with kpi_left:
         st.markdown(f"""
         <div class="kpi-card">
-            <div class="kpi-label">New Defects</div>
-            <div style="display:flex;justify-content:space-around;align-items:center;margin:.6rem 0 .2rem">
-                <div style="text-align:center">
-                    <div style="font-size:2.4rem;font-weight:700;color:#e65100;line-height:1">{n_new_yest}</div>
-                    <div style="font-size:.72rem;color:#9b72cf;margin-top:.3rem">{yest_label} · Yesterday</div>
-                </div>
-                <div style="width:1px;height:3rem;background:#ede5f7"></div>
-                <div style="text-align:center">
-                    <div style="font-size:2.4rem;font-weight:700;color:#e65100;line-height:1">{n_new_today}</div>
-                    <div style="font-size:.72rem;color:#9b72cf;margin-top:.3rem">{today_label} · Today</div>
-                </div>
+            <div class="kpi-label">New Defects — Today ({today.strftime("%b %#d")})</div>
+            <div style="display:flex;justify-content:center;align-items:center;gap:0.6rem;margin:.6rem 0 .2rem">
+                <div style="font-size:3rem;font-weight:700;color:#e65100;line-height:1">{n_new_today}</div>
+                <div style="font-size:2.6rem;font-weight:700;color:{arrow_color};line-height:1">{arrow}</div>
             </div>
+            <div style="font-size:.72rem;color:#9b72cf;margin-top:.3rem">{n_new_yest} yesterday ({yest_label})</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -297,8 +295,7 @@ with tab1:
                 <td>{_pcount(mask_backlog, priority)}</td>
             </tr>"""
 
-    _, tbl_col, _ = st.columns([1, 10, 1])
-    with tbl_col:
+    with st.container():
         st.markdown(
             f"""
             <table class="priority-table">
@@ -323,23 +320,53 @@ with tab2:
     # ── Defect health KPIs ────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Defect Health</div>', unsafe_allow_html=True)
 
-    n_no_date = int(open_df["planned_completion_date"].isna().sum())
-    n_overdue = int(df["is_overdue"].sum())
-    n_cr      = int(df["defect_type"].str.contains("Change Request", na=False).sum())
-    n_retest  = int((df["status"] == "Retest").sum())
+    df_no_date = open_df[open_df["planned_completion_date"].isna()]
+    df_overdue = df[df["is_overdue"]]
+    df_cr      = df[df["defect_type"].str.contains("Change Request", na=False)]
+    df_retest  = df[df["status"] == "Retest"]
+
+    n_no_date = len(df_no_date)
+    n_overdue = len(df_overdue)
+    n_cr      = len(df_cr)
+    n_retest  = len(df_retest)
+
+    _DISP_COLS = {
+        "issue_key":              "Key",
+        "summary":                "Summary",
+        "workstream":             "Workstream",
+        "status":                 "Status",
+        "planned_completion_date":"Due Date",
+    }
+
+    def _defect_table(source_df):
+        display = source_df[list(_DISP_COLS)].rename(columns=_DISP_COLS).copy()
+        display["Summary"] = display["Summary"].str[:60]
+        display = display.reset_index(drop=True)
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
+    health_specs = [
+        ("No Completion Date", n_no_date, "kpi-amber",  "Open defects without a date",      df_no_date),
+        ("Overdue",            n_overdue, "kpi-red",    "Past planned completion date",      df_overdue),
+        ("Change Requests",    n_cr,      "kpi-purple", "Defect type: Change Request",       df_cr),
+        ("In Retest",          n_retest,  "kpi-acc",    "Status: Retest",                    df_retest),
+    ]
 
     h1, h2, h3, h4 = st.columns(4)
-    for col, (label, value, css, subtitle) in zip(
-        [h1, h2, h3, h4],
-        [
-            ("No Completion Date", n_no_date, "kpi-amber",  "Open defects without a date"),
-            ("Overdue",            n_overdue, "kpi-red",    "Past planned completion date"),
-            ("Change Requests",    n_cr,      "kpi-purple", "Defect type: Change Request"),
-            ("In Retest",          n_retest,  "kpi-acc",    "Status: Retest"),
-        ],
-    ):
+    for col, (label, value, css, subtitle, detail_df) in zip([h1, h2, h3, h4], health_specs):
         with col:
-            st.markdown(_kpi_html(label, value, css, subtitle), unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div style="font-size:0.9rem;font-weight:700;color:#2d0b55;text-transform:uppercase;
+                            letter-spacing:.05em;margin-bottom:.6rem">{label}</div>
+                <div class="kpi-value {css}">{value}</div>
+                <div style="font-size:.72rem;color:#9b72cf;margin-top:.4rem">{subtitle}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            with st.expander(f"View {value} defect{'s' if value != 1 else ''}"):
+                if detail_df.empty:
+                    st.info("No defects in this category.")
+                else:
+                    _defect_table(detail_df)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
