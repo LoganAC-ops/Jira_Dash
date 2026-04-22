@@ -135,12 +135,7 @@ def get_issues() -> pd.DataFrame:
                 "priority": _extract_field(f, "priority"),
                 "status": _extract_field(f, "status"),
                 "issue_type": _extract_field(f, "issuetype"),
-                "created_date": (
-                    datetime.fromisoformat((f.get("created") or "").replace("Z", "+00:00"))
-                    .astimezone()
-                    .strftime("%Y-%m-%d")
-                    if f.get("created") else ""
-                ),
+                "created_date": (f.get("created") or "")[:10],
             }
             for jira_key, col_name in CUSTOM_FIELD_MAP.items():
                 row[col_name] = _extract_field(f, jira_key)

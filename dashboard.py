@@ -177,7 +177,7 @@ if "last_refresh" not in st.session_state:
     st.session_state["last_refresh"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ── Header ────────────────────────────────────────────────────────────────────
-today_display = date.today().strftime("%B %d, %Y")
+today_display = datetime.utcnow().strftime("%B %d, %Y")
 st.markdown(
     f"""
     <div class="main-header">
@@ -225,8 +225,8 @@ if selected_org != "All":
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 RESOLVED_STATUSES = {"Closed", "Cancelled", "Rejected", "Deferred"}
-yesterday_str = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
-today = date.today()
+today = datetime.utcnow().date()
+yesterday_str = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["Overview", "Workstream"])
