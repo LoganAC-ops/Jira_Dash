@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -86,11 +87,11 @@ st.markdown(
             letter-spacing: .06em;
             margin-bottom: .6rem;
         }
-        .kpi-value  { font-size: 3rem; font-weight: 700; line-height: 1; }
+        .kpi-value  { font-size: 3rem; font-weight: 700; line-height: 1; color: #5C2D91; }
         .kpi-purple { color: #5C2D91; }
-        .kpi-red    { color: #c62828; }
-        .kpi-amber  { color: #e65100; }
-        .kpi-acc    { color: #A100FF; }
+        .kpi-red    { color: #5C2D91; }
+        .kpi-amber  { color: #5C2D91; }
+        .kpi-acc    { color: #5C2D91; }
         /* ── Section titles ── */
         .section-title {
             font-size: 1rem;
@@ -228,6 +229,107 @@ RESOLVED_STATUSES = {"Closed", "Cancelled", "Rejected", "Deferred"}
 today = datetime.utcnow().date()
 yesterday_str = (today - timedelta(days=1)).strftime("%Y-%m-%d")
 
+# ── Defect health data (shared across tabs) ───────────────────────────────────
+open_df = df[df["is_active"]]
+
+df_no_date = open_df[open_df["planned_completion_date"].isna()]
+df_overdue = df[df["is_overdue"]]
+df_cr      = df[df["defect_type"].str.contains("Change Request", na=False)]
+df_retest  = df[df["status"] == "Retest"]
+
+n_no_date = len(df_no_date)
+n_overdue = len(df_overdue)
+n_cr      = len(df_cr)
+n_retest  = len(df_retest)
+
+_DISP_COLS = {
+    "issue_key":               "Key",
+    "summary":                 "Summary",
+    "workstream":              "Workstream",
+    "status":                  "Status",
+    "planned_completion_date": "Due Date",
+}
+
+def _defect_table(source_df):
+    display = source_df[list(_DISP_COLS)].rename(columns=_DISP_COLS).copy()
+    display["Summary"] = display["Summary"].str[:60]
+    display = display.reset_index(drop=True)
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+health_specs = [
+    ("No Completion Date", n_no_date, True,  "Open defects without a date", df_no_date),
+    ("Overdue",            n_overdue, True,   "Past planned completion date", df_overdue),
+    ("Change Requests",    n_cr,      False,  "Defect type: Change Request",  df_cr),
+    ("In Retest",          n_retest,  False,  "Status: Retest",               df_retest),
+]
+
+def _render_health_kpis():
+    h1, h2, h3, h4 = st.columns(4)
+    for col, (label, value, warn, subtitle, detail_df) in zip([h1, h2, h3, h4], health_specs):
+        num_color = "#c62828" if (warn and value > 0) else "#5C2D91"
+        with col:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div style="font-size:0.9rem;font-weight:700;color:#2d0b55;text-transform:uppercase;
+                            letter-spacing:.05em;margin-bottom:.6rem">{label}</div>
+                <div class="kpi-value" style="color:{num_color}">{value}</div>
+                <div style="font-size:.72rem;color:#9b72cf;margin-top:.4rem">{subtitle}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            with st.expander(f"View {value} defect{'s' if value != 1 else ''}"):
+                if detail_df.empty:
+                    st.info("No defects in this category.")
+                else:
+                    _defect_table(detail_df)
+
+# ── Aging defects data (shared across tabs) ───────────────────────────────────
+_open_bugs = df[df["is_active"] & (df["issue_type"] == "Bug")].copy()
+_open_bugs["bdays_open"] = _open_bugs["created_date"].apply(
+    lambda d: int(np.busday_count(d, today.isoformat())) if d else 0
+)
+
+AGING_SPECS = [
+    ("Critical", 1, "Critical open > 1 business day"),
+    ("High",     2, "High open > 2 business days"),
+    ("Medium",   4, "Medium open > 4 business days"),
+    ("Low",      8, "Low open > 8 business days"),
+]
+
+aging_data = []
+for sev, threshold, subtitle in AGING_SPECS:
+    aged_df = _open_bugs[
+        (_open_bugs["severity"] == sev) & (_open_bugs["bdays_open"] > threshold)
+    ][["issue_key", "summary", "severity", "status", "bdays_open"]].copy()
+    aged_df = aged_df.rename(columns={
+        "issue_key":  "Key",
+        "summary":    "Summary",
+        "severity":   "Severity",
+        "status":     "Status",
+        "bdays_open": "Days Open",
+    })
+    aged_df["Summary"] = aged_df["Summary"].str[:60]
+    aging_data.append((sev, threshold, subtitle, len(aged_df), aged_df))
+
+def _render_aging_kpis():
+    a1, a2, a3, a4 = st.columns(4)
+    for col, (sev, threshold, subtitle, count, detail_df) in zip([a1, a2, a3, a4], aging_data):
+        num_color = "#c62828" if count > 0 else "#5C2D91"
+        with col:
+            st.markdown(f"""
+            <div class="kpi-card">
+                <div style="font-size:0.9rem;font-weight:700;color:#2d0b55;text-transform:uppercase;
+                            letter-spacing:.05em;margin-bottom:.6rem">{sev}</div>
+                <div class="kpi-value" style="color:{num_color}">{count}</div>
+                <div style="font-size:.72rem;color:#9b72cf;margin-top:.4rem">{subtitle}</div>
+            </div>
+            """, unsafe_allow_html=True)
+            with st.expander(f"View {count} defect{'s' if count != 1 else ''}"):
+                if detail_df.empty:
+                    st.info("No aging defects in this category.")
+                else:
+                    st.dataframe(detail_df.reset_index(drop=True),
+                                 use_container_width=True, hide_index=True)
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab1, tab2 = st.tabs(["Overview", "Workstream"])
 
@@ -277,7 +379,7 @@ with tab1:
     with kpi_left:
         st.markdown(_trend_card(
             f"New Defects — Today ({today.strftime('%b %#d')})",
-            n_new_today, "color:#e65100",
+            n_new_today, "color:#5C2D91",
             new_arrow, new_color,
             f"{n_new_yest} yesterday ({yest_label})"
         ), unsafe_allow_html=True)
@@ -301,17 +403,18 @@ with tab1:
     st.markdown("<br>", unsafe_allow_html=True)
 
     PRIORITY_ROWS = [
-        ("High",   "p-high",   "● High"),
-        ("Medium", "p-medium", "● Medium"),
-        ("Low",    "p-low",    "● Low"),
+        ("Critical", "p-low", "● Critical"),
+        ("High",     "p-low", "● High"),
+        ("Medium",   "p-low", "● Medium"),
+        ("Low",      "p-low", "● Low"),
     ]
 
     def _pcount(mask_a, severity):
         return int((mask_a & (df["severity"] == severity)).sum())
 
-    mask_new      = (df["created_date"] == today_str) & (df["issue_type"] == "Bug")
+    mask_new      = (df["created_date"] == today_str) & bugs
     mask_resolved = (df["created_date"] == today_str) & bugs & df["status"].isin(RESOLVED_STATUSES)
-    mask_backlog  = (df["created_date"] == today_str) & bugs & ~df["status"].isin(RESOLVED_STATUSES)
+    mask_backlog  = bugs & ~df["status"].isin(RESOLVED_STATUSES)
 
     rows_html = ""
     for priority, css, label in PRIORITY_ROWS:
@@ -341,63 +444,16 @@ with tab1:
             unsafe_allow_html=True,
         )
 
-# ─────────────────────────────────────────────────────────────────────────────
-with tab2:
-    open_df = df[df["is_active"]]
-
-    # ── Defect health KPIs ────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="section-title">Defect Health</div>', unsafe_allow_html=True)
-
-    df_no_date = open_df[open_df["planned_completion_date"].isna()]
-    df_overdue = df[df["is_overdue"]]
-    df_cr      = df[df["defect_type"].str.contains("Change Request", na=False)]
-    df_retest  = df[df["status"] == "Retest"]
-
-    n_no_date = len(df_no_date)
-    n_overdue = len(df_overdue)
-    n_cr      = len(df_cr)
-    n_retest  = len(df_retest)
-
-    _DISP_COLS = {
-        "issue_key":              "Key",
-        "summary":                "Summary",
-        "workstream":             "Workstream",
-        "status":                 "Status",
-        "planned_completion_date":"Due Date",
-    }
-
-    def _defect_table(source_df):
-        display = source_df[list(_DISP_COLS)].rename(columns=_DISP_COLS).copy()
-        display["Summary"] = display["Summary"].str[:60]
-        display = display.reset_index(drop=True)
-        st.dataframe(display, use_container_width=True, hide_index=True)
-
-    health_specs = [
-        ("No Completion Date", n_no_date, "kpi-amber",  "Open defects without a date",      df_no_date),
-        ("Overdue",            n_overdue, "kpi-red",    "Past planned completion date",      df_overdue),
-        ("Change Requests",    n_cr,      "kpi-purple", "Defect type: Change Request",       df_cr),
-        ("In Retest",          n_retest,  "kpi-acc",    "Status: Retest",                    df_retest),
-    ]
-
-    h1, h2, h3, h4 = st.columns(4)
-    for col, (label, value, css, subtitle, detail_df) in zip([h1, h2, h3, h4], health_specs):
-        with col:
-            st.markdown(f"""
-            <div class="kpi-card">
-                <div style="font-size:0.9rem;font-weight:700;color:#2d0b55;text-transform:uppercase;
-                            letter-spacing:.05em;margin-bottom:.6rem">{label}</div>
-                <div class="kpi-value {css}">{value}</div>
-                <div style="font-size:.72rem;color:#9b72cf;margin-top:.4rem">{subtitle}</div>
-            </div>
-            """, unsafe_allow_html=True)
-            with st.expander(f"View {value} defect{'s' if value != 1 else ''}"):
-                if detail_df.empty:
-                    st.info("No defects in this category.")
-                else:
-                    _defect_table(detail_df)
+    _render_health_kpis()
 
     st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Aging Defects by Severity</div>', unsafe_allow_html=True)
+    _render_aging_kpis()
 
+# ─────────────────────────────────────────────────────────────────────────────
+with tab2:
     # ── Planned completions section ───────────────────────────────────────────
     st.markdown('<div class="section-title">Planned Completions</div>', unsafe_allow_html=True)
 
@@ -437,7 +493,7 @@ with tab2:
             badges = "".join(
                 f"<span style='background:#f3e8ff;color:#5C2D91;padding:.3rem .9rem;"
                 f"border-radius:20px;font-size:.95rem;font-weight:600;white-space:nowrap'>"
-                f"{ws}&nbsp;<strong style='color:#A100FF'>{int(cnt)}</strong></span>"
+                f"{ws}&nbsp;<strong style='color:#5C2D91'>{int(cnt)}</strong></span>"
                 for ws, cnt in ws_counts.items()
             )
             st.markdown(
