@@ -36,6 +36,7 @@ CUSTOM_FIELD_MAP = {
     "customfield_10110": "responsible_org",          # Responsible Organization
     "customfield_10700": "pre_test",                 # Pre-test
     "customfield_10105": "stage_found",              # Stage Found
+    "customfield_10094": "severity",                 # Severity
 }
 
 INACTIVE_STATUSES = {"Closed", "Rejected", "Cancelled", "Deferred"}
