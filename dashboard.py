@@ -218,10 +218,10 @@ with col_refresh:
 with col_meta:
     st.caption(f"{len(df)} issues loaded · Last refreshed: {st.session_state['last_refresh']}")
 with col_org:
-    all_orgs = ["All"] + sorted(df["responsible_org"].dropna().unique().tolist())
-    selected_org = st.selectbox("Responsible Organization", options=all_orgs)
-if selected_org != "All":
-    df = df[df["responsible_org"] == selected_org]
+    all_orgs = sorted(df["responsible_org"].dropna().unique().tolist())
+    selected_orgs = st.multiselect("Responsible Organization", options=all_orgs, placeholder="All organizations")
+if selected_orgs:
+    df = df[df["responsible_org"].isin(selected_orgs)]
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 RESOLVED_STATUSES = {"Closed", "Cancelled", "Rejected", "Deferred"}
@@ -235,39 +235,67 @@ tab1, tab2 = st.tabs(["Overview", "Workstream"])
 with tab1:
     # ── KPI tiles ─────────────────────────────────────────────────────────────
     today_str      = today.strftime("%Y-%m-%d")
-    n_new_today    = int(((df["created_date"] == today_str)    & (df["issue_type"] == "Bug")).sum())
-    n_new_yest     = int(((df["created_date"] == yesterday_str) & (df["issue_type"] == "Bug")).sum())
-    n_resolved     = int(df["status"].isin(RESOLVED_STATUSES).sum())
-    n_backlog      = int((~df["status"].isin(RESOLVED_STATUSES)).sum())
+    n_new_today      = int(((df["created_date"] == today_str)    & (df["issue_type"] == "Bug")).sum())
+    n_new_yest       = int(((df["created_date"] == yesterday_str) & (df["issue_type"] == "Bug")).sum())
+    bugs = df["issue_type"] == "Bug"
+    n_resolved       = int((bugs & df["status"].isin(RESOLVED_STATUSES)).sum())
+    n_resolved_today = int((bugs & (df["created_date"] == today_str)     & df["status"].isin(RESOLVED_STATUSES)).sum())
+    n_resolved_yest  = int((bugs & (df["created_date"] == yesterday_str) & df["status"].isin(RESOLVED_STATUSES)).sum())
+    n_backlog        = int((bugs & ~df["status"].isin(RESOLVED_STATUSES)).sum())
+    n_backlog_today  = int((bugs & (df["created_date"] == today_str)     & ~df["status"].isin(RESOLVED_STATUSES)).sum())
+    n_backlog_yest   = int((bugs & (df["created_date"] == yesterday_str) & ~df["status"].isin(RESOLVED_STATUSES)).sum())
 
     yest_label = (today - timedelta(days=1)).strftime("%b %#d")
 
-    if n_new_today < n_new_yest:
-        arrow, arrow_color = "▼", "#2e7d32"
-    elif n_new_today > n_new_yest:
-        arrow, arrow_color = "▲", "#c62828"
-    else:
-        arrow, arrow_color = "●", "#9b72cf"
+    def _arrow(today_val, yest_val):
+        if today_val == yest_val:
+            return "●", "#9b72cf"
+        going_up = today_val > yest_val
+        symbol = "▲" if going_up else "▼"
+        color  = "#c62828" if going_up else "#2e7d32"
+        return symbol, color
+
+    new_arrow,  new_color  = _arrow(n_new_today,      n_new_yest)
+    res_arrow,  res_color  = _arrow(n_resolved_today, n_resolved_yest)
+    bl_arrow,   bl_color   = _arrow(n_backlog_today,  n_backlog_yest)
 
     kpi_left, kpi_mid, kpi_right = st.columns(3, gap="large")
 
-    with kpi_left:
-        st.markdown(f"""
+    def _trend_card(label, big_value, big_css, arrow, arrow_color, subtitle):
+        return f"""
         <div class="kpi-card">
-            <div class="kpi-label">New Defects — Today ({today.strftime("%b %#d")})</div>
+            <div class="kpi-label">{label}</div>
             <div style="display:flex;justify-content:center;align-items:center;gap:0.6rem;margin:.6rem 0 .2rem">
-                <div style="font-size:3rem;font-weight:700;color:#e65100;line-height:1">{n_new_today}</div>
+                <div style="font-size:3rem;font-weight:700;{big_css};line-height:1">{big_value}</div>
                 <div style="font-size:2.6rem;font-weight:700;color:{arrow_color};line-height:1">{arrow}</div>
             </div>
-            <div style="font-size:.72rem;color:#9b72cf;margin-top:.3rem">{n_new_yest} yesterday ({yest_label})</div>
+            <div style="font-size:.72rem;color:#9b72cf;margin-top:.3rem">{subtitle}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+
+    with kpi_left:
+        st.markdown(_trend_card(
+            f"New Defects — Today ({today.strftime('%b %#d')})",
+            n_new_today, "color:#e65100",
+            new_arrow, new_color,
+            f"{n_new_yest} yesterday ({yest_label})"
+        ), unsafe_allow_html=True)
 
     with kpi_mid:
-        st.markdown(_kpi_html("Resolved", n_resolved, "kpi-purple", "Closed, Cancelled or Rejected"), unsafe_allow_html=True)
+        st.markdown(_trend_card(
+            f"Resolved — Today ({today.strftime('%b %#d')})",
+            n_resolved_today, "color:#5C2D91",
+            res_arrow, res_color,
+            f"{n_resolved_yest} yesterday ({yest_label}) · {n_resolved} total"
+        ), unsafe_allow_html=True)
 
     with kpi_right:
-        st.markdown(_kpi_html("Backlog", n_backlog, "kpi-acc", "Not yet resolved"), unsafe_allow_html=True)
+        st.markdown(_trend_card(
+            f"Backlog — Today ({today.strftime('%b %#d')})",
+            n_backlog_today, "color:#A100FF",
+            bl_arrow, bl_color,
+            f"{n_backlog_yest} yesterday ({yest_label}) · {n_backlog} total open"
+        ), unsafe_allow_html=True)
 
     # ── Priority breakdown ─────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
@@ -281,9 +309,9 @@ with tab1:
     def _pcount(mask_a, priority):
         return int((mask_a & (df["priority"] == priority)).sum())
 
-    mask_new      = (df["created_date"].isin([today_str, yesterday_str])) & (df["issue_type"] == "Bug")
-    mask_resolved = df["status"].isin(RESOLVED_STATUSES)
-    mask_backlog  = ~mask_resolved
+    mask_new      = (df["created_date"] == today_str) & (df["issue_type"] == "Bug")
+    mask_resolved = (df["created_date"] == today_str) & df["status"].isin(RESOLVED_STATUSES)
+    mask_backlog  = (df["created_date"] == today_str) & ~df["status"].isin(RESOLVED_STATUSES)
 
     rows_html = ""
     for priority, css, label in PRIORITY_ROWS:
@@ -392,40 +420,101 @@ with tab2:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ── Open defects grouped by date & workstream ─────────────────────────────
-    st.markdown('<div class="section-title">Open Defects by Date &amp; Workstream (next 14 days)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Open Defects by Planned Date &amp; Workstream</div>', unsafe_allow_html=True)
 
-    upcoming = [today + timedelta(days=i) for i in range(14)]
-    range_df = ws_df[ws_df["planned_completion_date"].isin(upcoming)]
+    upcoming_5 = [today + timedelta(days=i) for i in range(6)]
+    range_df = ws_df[ws_df["planned_completion_date"].isin(upcoming_5)]
+
+    layout_choice = st.radio(
+        "Layout style",
+        ["Option A — Pill badges", "Option B — Ranked table", "Option C — Bar rows"],
+        horizontal=True,
+        key="date_layout",
+    )
 
     if range_df.empty:
-        st.info("No open defects with planned completion dates in the next 14 days.")
+        st.info("No open defects with planned completion dates in the next 5 days.")
     else:
-        top_ws = (
-            range_df.groupby("workstream").size()
-            .sort_values(ascending=False)
-            .head(5)
-            .index.tolist()
-        )
+        sorted_dates = sorted(range_df["planned_completion_date"].unique())
 
-        pivot = (
-            range_df[range_df["workstream"].isin(top_ws)]
-            .groupby(["planned_completion_date", "workstream"])
-            .size()
-            .unstack(fill_value=0)
-            .reindex(columns=top_ws, fill_value=0)
-        )
-        pivot = pivot[pivot.sum(axis=1) > 0]
+        # ── Option A: pill badges ─────────────────────────────────────────────
+        if layout_choice.startswith("Option A"):
+            for d in sorted_dates:
+                day_df = range_df[range_df["planned_completion_date"] == d]
+                ws_counts = day_df.groupby("workstream").size().sort_values(ascending=False).head(5)
+                total = int(len(day_df))
+                badges = "".join(
+                    f"<span style='background:#f3e8ff;color:#5C2D91;padding:.25rem .75rem;"
+                    f"border-radius:20px;font-size:.82rem;font-weight:600;white-space:nowrap'>"
+                    f"{ws}&nbsp;<strong style='color:#A100FF'>{int(cnt)}</strong></span>"
+                    for ws, cnt in ws_counts.items()
+                )
+                st.markdown(
+                    f"<div style='background:#fff;border:1px solid #ede5f7;border-left:4px solid #A100FF;"
+                    f"border-radius:6px;padding:.7rem 1rem;margin-bottom:.5rem;"
+                    f"display:flex;align-items:center;gap:1rem;flex-wrap:wrap'>"
+                    f"<div style='font-weight:700;color:#2d0b55;font-size:.95rem;min-width:80px'>{_ordinal(d)}</div>"
+                    f"<div style='color:#9b72cf;font-size:.78rem;min-width:55px'>{total} total</div>"
+                    f"<div style='display:flex;flex-wrap:wrap;gap:.4rem'>{badges}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
-        header_cells = "".join(f"<th>{ws}</th>" for ws in top_ws)
-        rows_html = ""
-        for d, row in pivot.iterrows():
-            cells = "".join(f"<td>{int(row[ws])}</td>" for ws in top_ws)
-            rows_html += f"<tr><td style='text-align:left'>{_ordinal(d)}</td>{cells}</tr>"
+        # ── Option B: ranked table ────────────────────────────────────────────
+        elif layout_choice.startswith("Option B"):
+            for d in sorted_dates:
+                day_df = range_df[range_df["planned_completion_date"] == d]
+                ws_counts = day_df.groupby("workstream").size().sort_values(ascending=False).head(5)
+                total = int(len(day_df))
+                rows_html = "".join(
+                    f"<tr>"
+                    f"<td style='text-align:left;padding:.55rem .25rem .55rem 1rem;color:#9b72cf;"
+                    f"font-weight:700;font-size:.88rem;width:2rem'>#{i+1}</td>"
+                    f"<td style='text-align:left;padding:.55rem .5rem;color:#444;font-size:.88rem'>{ws}</td>"
+                    f"<td style='text-align:right;padding:.55rem 1rem;font-weight:700;"
+                    f"font-size:1rem;color:#5C2D91;width:3rem'>{int(cnt)}</td>"
+                    f"</tr>"
+                    for i, (ws, cnt) in enumerate(ws_counts.items())
+                )
+                st.markdown(
+                    f"<div style='margin-bottom:1rem'>"
+                    f"<div style='width:50%;background:#2d0b55;color:#e8d5ff;padding:.5rem 1rem;"
+                    f"border-radius:6px 6px 0 0;font-weight:700;font-size:.9rem;"
+                    f"display:flex;justify-content:space-between;box-sizing:border-box'>"
+                    f"<span>{_ordinal(d)}</span><span style='color:#c9a8f0;font-weight:400'>{total} total</span></div>"
+                    f"<table style='width:50%;border-collapse:collapse;background:#fff;"
+                    f"border:1px solid #ede5f7;border-top:none;border-radius:0 0 6px 6px'>"
+                    f"<tbody>{rows_html}</tbody></table></div>",
+                    unsafe_allow_html=True,
+                )
 
-        st.markdown(f"""
-        <table class="priority-table">
-            <thead><tr><th style='text-align:left'>Date</th>{header_cells}</tr></thead>
-            <tbody>{rows_html}</tbody>
-        </table>
-        """, unsafe_allow_html=True)
+        # ── Option C: bar rows ────────────────────────────────────────────────
+        else:
+            for d in sorted_dates:
+                day_df = range_df[range_df["planned_completion_date"] == d]
+                ws_counts = day_df.groupby("workstream").size().sort_values(ascending=False).head(5)
+                total = int(len(day_df))
+                max_cnt = int(ws_counts.iloc[0]) if not ws_counts.empty else 1
+                bars_html = "".join(
+                    f"<div style='display:flex;align-items:center;gap:.5rem;margin:.35rem 0'>"
+                    f"<div style='width:150px;font-size:.83rem;color:#444;text-align:left;"
+                    f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{ws}</div>"
+                    f"<div style='width:28px;font-weight:700;color:#5C2D91;font-size:.88rem;"
+                    f"text-align:right;flex-shrink:0'>{int(cnt)}</div>"
+                    f"<div style='flex:1;background:#f3e8ff;border-radius:4px;height:18px'>"
+                    f"<div style='width:{int(cnt/max_cnt*100)}%;background:#A100FF;"
+                    f"border-radius:4px;height:18px'></div></div>"
+                    f"</div>"
+                    for ws, cnt in ws_counts.items()
+                )
+                st.markdown(
+                    f"<div style='width:50%;background:#fff;border:1px solid #ede5f7;border-radius:6px;"
+                    f"padding:.8rem 1.2rem;margin-bottom:.75rem'>"
+                    f"<div style='display:flex;justify-content:space-between;align-items:baseline;"
+                    f"margin-bottom:.5rem;border-bottom:1px solid #f3e8ff;padding-bottom:.4rem'>"
+                    f"<span style='font-weight:700;color:#2d0b55;font-size:.95rem'>{_ordinal(d)}</span>"
+                    f"<span style='color:#9b72cf;font-size:.78rem'>{total} total</span></div>"
+                    f"{bars_html}</div>",
+                    unsafe_allow_html=True,
+                )
 
