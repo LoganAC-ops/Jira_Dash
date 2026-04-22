@@ -463,10 +463,18 @@ with tab2:
     sel_ws = st.selectbox("Filter by Workstream", ws_options, key="ws_filter")
     ws_df = open_df if sel_ws == "All" else open_df[open_df["workstream"] == sel_ws]
 
-    # 4 date KPI widgets — today through today+3
+    def _next_bdays(start: date, n: int):
+        days, d = [], start
+        while len(days) < n:
+            if d.weekday() < 5:
+                days.append(d)
+            d += timedelta(days=1)
+        return days
+
+    # 4 date KPI widgets — next 4 business days
+    bdays_4 = _next_bdays(today, 4)
     d_cols = st.columns(4)
-    for i, col in enumerate(d_cols):
-        d = today + timedelta(days=i)
+    for i, (col, d) in enumerate(zip(d_cols, bdays_4)):
         day_label  = "Today" if i == 0 else d.strftime("%A")
         date_label = d.strftime("%b %d")
         count = int((ws_df["planned_completion_date"] == d).sum())
@@ -478,11 +486,11 @@ with tab2:
     # ── Open defects grouped by date & workstream ─────────────────────────────
     st.markdown('<div class="section-title">Open Defects by Planned Date &amp; Workstream</div>', unsafe_allow_html=True)
 
-    upcoming_5 = [today + timedelta(days=i) for i in range(6)]
-    range_df = ws_df[ws_df["planned_completion_date"].isin(upcoming_5)]
+    upcoming_bdays = _next_bdays(today, 5)
+    range_df = ws_df[ws_df["planned_completion_date"].isin(upcoming_bdays)]
 
     if range_df.empty:
-        st.info("No open defects with planned completion dates in the next 5 days.")
+        st.info("No open defects with planned completion dates in the next 5 business days.")
     else:
         sorted_dates = sorted(range_df["planned_completion_date"].unique())
 
@@ -500,7 +508,10 @@ with tab2:
                 f"<div style='background:#fff;border:1px solid #ede5f7;border-left:4px solid #A100FF;"
                 f"border-radius:6px;padding:.8rem 1.2rem;margin-bottom:.5rem;"
                 f"display:flex;align-items:center;gap:1.2rem;flex-wrap:wrap'>"
-                f"<div style='font-weight:700;color:#2d0b55;font-size:1.05rem;min-width:80px'>{_ordinal(d)}</div>"
+                f"<div style='min-width:90px'>"
+                f"<div style='font-weight:700;color:#2d0b55;font-size:1.05rem'>{_ordinal(d)}</div>"
+                f"<div style='font-size:.72rem;color:#9b72cf;margin-top:.1rem'>{d.strftime('%A')}</div>"
+                f"</div>"
                 f"<div style='color:#9b72cf;font-size:.85rem;min-width:55px'>{total} total</div>"
                 f"<div style='display:flex;flex-wrap:wrap;gap:.5rem'>{badges}</div>"
                 f"</div>",
