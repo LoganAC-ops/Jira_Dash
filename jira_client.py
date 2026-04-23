@@ -37,6 +37,7 @@ CUSTOM_FIELD_MAP = {
     "customfield_10700": "pre_test",                 # Pre-test
     "customfield_10105": "stage_found",              # Stage Found
     "customfield_10094": "severity",                 # Severity
+    "customfield_10000": "regions_impacted",         # Regions Impacted (LA / NA) — replace field ID
 }
 
 INACTIVE_STATUSES = {"Closed", "Rejected", "Cancelled", "Deferred"}
