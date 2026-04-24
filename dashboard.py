@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
@@ -199,7 +200,12 @@ if "last_refresh" not in st.session_state:
     st.session_state["last_refresh"] = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-5))).strftime("%Y-%m-%d %H:%M CT")
 
 # ── Backlog snapshot (persist daily total for yesterday comparison) ────────────
-_SNAPSHOT_FILE = os.path.join(os.path.dirname(__file__), "backlog_snapshot.json")
+if getattr(sys, "frozen", False):
+    _DATA_DIR = os.path.join(os.path.expanduser("~"), ".itest_dashboard")
+    os.makedirs(_DATA_DIR, exist_ok=True)
+    _SNAPSHOT_FILE = os.path.join(_DATA_DIR, "backlog_snapshot.json")
+else:
+    _SNAPSHOT_FILE = os.path.join(os.path.dirname(__file__), "backlog_snapshot.json")
 
 def _load_snapshot() -> dict:
     try:
@@ -248,7 +254,7 @@ if df.empty:
 
 # ── Toolbar: refresh + filters ───────────────────────────────────────────────
 col_refresh, col_region, col_org, col_status, col_status_mode = st.columns(
-    [0.6, 1.5, 2.5, 2.5, 0.8], vertical_alignment="bottom"
+    [1, 1.5, 2.5, 2.5, 0.8], vertical_alignment="bottom"
 )
 with col_refresh:
     if st.button("Refresh", use_container_width=True, help=f"Last updated: {st.session_state['last_refresh']}"):
