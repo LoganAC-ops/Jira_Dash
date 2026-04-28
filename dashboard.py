@@ -268,10 +268,12 @@ def _normalize_org(org: str) -> str:
 df["responsible_org_display"] = df["responsible_org"].apply(_normalize_org)
 
 with col_region:
-    _region_opts = sorted(
-        r for r in df["regions_impacted"].dropna().unique()
-        if r and r != "Unassigned"
-    )
+    _region_opts = sorted({
+        part
+        for val in df["regions_impacted"].dropna()
+        for part in str(val).split(", ")
+        if part and part != "Unassigned"
+    })
     selected_regions = st.multiselect("Region", options=_region_opts, placeholder="All regions")
 with col_org:
     all_orgs = sorted(df["responsible_org_display"].dropna().unique().tolist())
@@ -294,7 +296,7 @@ if selected_statuses:
         df = df[df["status"].isin(selected_statuses)]
 
 # ── Shared constants ──────────────────────────────────────────────────────────
-RESOLVED_STATUSES = {"Closed", "Cancelled", "Rejected", "Deferred"}
+RESOLVED_STATUSES = {"Closed"}
 today         = datetime.utcnow().date()
 today_str     = today.strftime("%Y-%m-%d")
 yesterday_str = (today - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -324,11 +326,22 @@ _DISP_COLS = {
     "planned_completion_date": "Due Date",
 }
 
+_LINK_COL_CFG = st.column_config.LinkColumn("Key", display_text=r"([A-Z]+-\d+)")
+
+def _add_links(display_df: pd.DataFrame) -> pd.DataFrame:
+    """Replace the 'Key' column (issue key strings) with clickable Jira URLs."""
+    display_df = display_df.copy()
+    display_df["Key"] = display_df["Key"].apply(
+        lambda k: f"{jira_client.JIRA_BASE_URL}/browse/{k}"
+    )
+    return display_df
+
 def _defect_table(source_df):
     display = source_df[list(_DISP_COLS)].rename(columns=_DISP_COLS).copy()
     display["Summary"] = display["Summary"].str[:60]
-    display = display.reset_index(drop=True)
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    display = _add_links(display).reset_index(drop=True)
+    st.dataframe(display, use_container_width=True, hide_index=True,
+                 column_config={"Key": _LINK_COL_CFG})
 
 health_specs_row1 = [
     ("No Completion Date", n_no_date, True,  "Open defects without a date", df_no_date),
@@ -413,8 +426,9 @@ def _render_aging_kpis():
                 if detail_df.empty:
                     st.info("No aging defects in this category.")
                 else:
-                    st.dataframe(detail_df.reset_index(drop=True),
-                                 use_container_width=True, hide_index=True)
+                    st.dataframe(_add_links(detail_df).reset_index(drop=True),
+                                 use_container_width=True, hide_index=True,
+                                 column_config={"Key": _LINK_COL_CFG})
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 BPL1_MAP = {
@@ -462,36 +476,217 @@ _dd_other  = _dd_base[
 
 
 def _build_excel_report() -> bytes:
-    _OV_COLS = {
-        "issue_key": "Key", "summary": "Summary", "issue_type": "Issue Type",
-        "status": "Status", "severity": "Severity", "priority": "Priority",
-        "created_date": "Created Date", "planned_completion_date": "Due Date",
-        "workstream": "Workstream", "responsible_org_display": "Organization",
-        "regions_impacted": "Region",
-    }
-    _WS_COLS = {
-        "issue_key": "Key", "summary": "Summary", "workstream": "Workstream",
-        "status": "Status", "severity": "Severity",
-        "planned_completion_date": "Due Date", "responsible_org_display": "Organization",
-        "regions_impacted": "Region",
-    }
-    _DD_COLS = {
-        "issue_key": "Key", "summary": "Summary", "ws_group": "Workstream Group",
-        "workstream": "Workstream", "status": "Status", "severity": "Severity",
-        "created_date": "Created Date", "bdays_open": "Business Days Open",
-        "responsible_org_display": "Organization", "regions_impacted": "Region",
-    }
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    # ── Style helpers ─────────────────────────────────────────────────────────
+    HDR_FILL = PatternFill("solid", fgColor="2D0B55")
+    HDR_FONT = Font(color="E8D5FF", bold=True)
+    SEC_FILL = PatternFill("solid", fgColor="EDE5F7")
+    SEC_FONT = Font(color="2D0B55", bold=True, size=11)
+    BOLD     = Font(bold=True)
+    LINK_FONT = Font(color="0563C1", underline="single")
+    center   = Alignment(horizontal="center")
+
+    def _sec(ws, row, title):
+        c = ws.cell(row=row, column=1, value=title)
+        c.font = SEC_FONT
+        c.fill = SEC_FILL
+
+    def _hdr(ws, row, cols):
+        for i, v in enumerate(cols, 1):
+            c = ws.cell(row=row, column=i, value=v)
+            c.fill = HDR_FILL
+            c.font = HDR_FONT
+            c.alignment = center
+
+    def _col_widths(ws, widths):
+        for i, w in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+    wb = openpyxl.Workbook()
+
+    # ── Reusable masks ────────────────────────────────────────────────────────
+    _bugs        = df["issue_type"] == "Bug"
+    _known_sev   = {"Critical", "High", "Medium", "Low"}
+    _mask_new    = (df["created_date"] == today_str) & _bugs
+    _mask_res    = _mask_new & df["status"].isin(RESOLVED_STATUSES)
+    _mask_back   = _bugs & ~df["status"].isin(RESOLVED_STATUSES)
+    _n_new       = int(_mask_new.sum())
+    _n_res_today = int(_mask_res.sum())
+    _n_back      = int(_mask_back.sum())
+
+    def _sev_counts(sev):
+        if sev == "Unassigned":
+            m = ~df["severity"].isin(_known_sev)
+        else:
+            m = df["severity"] == sev
+        return int((_mask_new & m).sum()), int((_mask_res & m).sum()), int((_mask_back & m).sum())
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sheet 1 — Overview
+    # ─────────────────────────────────────────────────────────────────────────
+    ws1 = wb.active
+    ws1.title = "Overview"
+
+    # KPI Summary
+    _sec(ws1, 1, "KPI SUMMARY")
+    _hdr(ws1, 2, ["New Defects Today", "Resolved Today", "Total Backlog"])
+    for col, val in enumerate([_n_new, _n_res_today, _n_back], 1):
+        c = ws1.cell(row=3, column=col, value=val)
+        c.alignment = center
+        c.font = Font(bold=True, size=14)
+
+    # Defects by Severity
+    _sec(ws1, 5, "DEFECTS BY SEVERITY")
+    _hdr(ws1, 6, ["Severity", "New Defects", "Resolved", "Backlog"])
+    for i, sev in enumerate(["Critical", "High", "Medium", "Low", "Unassigned"]):
+        r = 7 + i
+        n, res, back = _sev_counts(sev)
+        ws1.cell(row=r, column=1, value=sev).font = BOLD
+        for col, val in enumerate([n, res, back], 2):
+            ws1.cell(row=r, column=col, value=val).alignment = center
+
+    # Critical Defects list
+    crit_df = _open_bugs[_open_bugs["severity"] == "Critical"].sort_values("bdays_open", ascending=False)
+    r = 14
+    _sec(ws1, r, f"CRITICAL DEFECTS  ({len(crit_df)} open)")
+    r += 1
+    _hdr(ws1, r, ["Key", "Summary", "Status", "Days Open"])
+    r += 1
+    for _, row_data in crit_df.iterrows():
+        key = row_data["issue_key"]
+        lnk = ws1.cell(row=r, column=1, value=key)
+        lnk.hyperlink = f"{jira_client.JIRA_BASE_URL}/browse/{key}"
+        lnk.font = LINK_FONT
+        ws1.cell(row=r, column=2, value=str(row_data["summary"])[:80])
+        ws1.cell(row=r, column=3, value=row_data["status"])
+        ws1.cell(row=r, column=4, value=int(row_data["bdays_open"])).alignment = center
+        r += 1
+
+    # Defect Health
+    r += 1
+    _sec(ws1, r, "DEFECT HEALTH")
+    r += 1
+    _hdr(ws1, r, ["Metric", "Count"])
+    r += 1
+    for label, count in [
+        ("No Completion Date", n_no_date),
+        ("Overdue",            n_overdue),
+        ("Change Requests",    n_cr),
+        ("Retest",             n_retest),
+        ("Pending Information", n_pending_info),
+        ("Deferred",           n_deferred),
+    ]:
+        ws1.cell(row=r, column=1, value=label)
+        ws1.cell(row=r, column=2, value=count).alignment = center
+        r += 1
+
+    # Aging Defects
+    r += 1
+    _sec(ws1, r, "AGING DEFECTS")
+    r += 1
+    _hdr(ws1, r, ["Severity", "Threshold", "Count"])
+    r += 1
+    for sev, _thr, subtitle, count, _ in aging_data:
+        ws1.cell(row=r, column=1, value=sev)
+        ws1.cell(row=r, column=2, value=subtitle)
+        ws1.cell(row=r, column=3, value=count).alignment = center
+        r += 1
+
+    _col_widths(ws1, [22, 65, 22, 14])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sheet 2 — Workstream
+    # ─────────────────────────────────────────────────────────────────────────
+    ws2 = wb.create_sheet("Workstream")
+
+    def _xl_bdays(n):
+        days, d = [], today
+        while len(days) < n:
+            if d.weekday() < 5:
+                days.append(d)
+            d += timedelta(days=1)
+        return days
+
+    bdays4 = _xl_bdays(4)
+    day_labels = ["Today" if i == 0 else d.strftime("%A %b %#d") for i, d in enumerate(bdays4)]
+
+    _sec(ws2, 1, "DEFECTS CLOSING — NEXT 4 BUSINESS DAYS")
+    _hdr(ws2, 2, day_labels)
+    for col, d in enumerate(bdays4, 1):
+        cnt = int((open_df["planned_completion_date"] == d).sum())
+        c = ws2.cell(row=3, column=col, value=cnt)
+        c.alignment = center
+        c.font = Font(bold=True, size=14)
+
+    BUCKETS_XL = [
+        ("0–4 days",   0,  4),
+        ("5–9 days",   5,  9),
+        ("10–14 days", 10, 14),
+        ("15–19 days", 15, 19),
+        ("20–24 days", 20, 24),
+        ("25+ days",   25, 9999),
+    ]
+    sched_xl = open_df[open_df["planned_completion_date"].notna()].copy()
+    sched_xl["days_until"] = sched_xl["planned_completion_date"].apply(lambda d: (d - today).days)
+    sched_xl = sched_xl[sched_xl["days_until"] >= 0]
+
+    _sec(ws2, 5, "DEFECTS BY DAYS UNTIL PLANNED COMPLETION")
+    _hdr(ws2, 6, [b[0] for b in BUCKETS_XL])
+    for col, (_, lo, hi) in enumerate(BUCKETS_XL, 1):
+        cnt = int(((sched_xl["days_until"] >= lo) & (sched_xl["days_until"] <= hi)).sum())
+        c = ws2.cell(row=7, column=col, value=cnt)
+        c.alignment = center
+        c.font = Font(bold=True, size=14)
+
+    _col_widths(ws2, [20, 20, 20, 20, 20, 20])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sheet 3 — Deep Dive
+    # ─────────────────────────────────────────────────────────────────────────
+    ws3 = wb.create_sheet("Deep Dive")
+
+    WS_ORDER = ["Finance", "OTC", "Data", "LogOps", "STP", "MTI", "D&A",
+                "Sales", "PLM", "APO", "Platform", "Unassigned"]
+
+    _sec(ws3, 1, "TOTAL OPEN DEFECTS BY WORKSTREAM")
+    _hdr(ws3, 2, ["Workstream", "Security", "Integration", "Data", "Functional", "Total"])
+
+    r = 3
+    col_tots = [0, 0, 0, 0]
+    grand = 0
+    for ws_name in WS_ORDER:
+        n_s = int((_dd_sec["ws_group"]   == ws_name).sum())
+        n_i = int((_dd_int["ws_group"]   == ws_name).sum())
+        n_d = int((_dd_data["ws_group"]  == ws_name).sum())
+        n_f = int((_dd_other["ws_group"] == ws_name).sum())
+        total = n_s + n_i + n_d + n_f
+        if total == 0:
+            continue
+        for j, v in enumerate([ws_name, n_s, n_i, n_d, n_f, total], 1):
+            c = ws3.cell(row=r, column=j, value=v)
+            if j == 1:
+                c.font = BOLD
+            else:
+                c.alignment = center
+        col_tots[0] += n_s; col_tots[1] += n_i; col_tots[2] += n_d; col_tots[3] += n_f
+        grand += total
+        r += 1
+
+    ws3.cell(row=r, column=1, value="Total").font = Font(bold=True, color="FFFFFF")
+    ws3.cell(row=r, column=1).fill = HDR_FILL
+    for j, v in enumerate(col_tots + [grand], 2):
+        c = ws3.cell(row=r, column=j, value=v)
+        c.alignment = center
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = HDR_FILL
+
+    _col_widths(ws3, [18, 14, 14, 14, 14, 14])
+
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df[[c for c in _OV_COLS if c in df.columns]].rename(columns=_OV_COLS).to_excel(
-            writer, sheet_name="Overview", index=False
-        )
-        open_df[[c for c in _WS_COLS if c in open_df.columns]].rename(columns=_WS_COLS).to_excel(
-            writer, sheet_name="Workstream", index=False
-        )
-        _dd_base[[c for c in _DD_COLS if c in _dd_base.columns]].rename(columns=_DD_COLS).to_excel(
-            writer, sheet_name="Deep Dive", index=False
-        )
+    wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
@@ -637,6 +832,47 @@ with tab1:
         )
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    for priority, _css, label in PRIORITY_ROWS:
+        if priority not in ("Critical", "High"):
+            continue
+        if priority == "Unassigned":
+            sev_bugs = _open_bugs[
+                ~_open_bugs["severity"].isin(KNOWN_SEVERITIES) &
+                ~_open_bugs["status"].isin(RESOLVED_STATUSES)
+            ]
+        else:
+            sev_bugs = _open_bugs[
+                (_open_bugs["severity"] == priority) &
+                ~_open_bugs["status"].isin(RESOLVED_STATUSES)
+            ]
+        n = len(sev_bugs)
+        with st.expander(f"{label}  —  {n} open backlog ticket{'s' if n != 1 else ''}"):
+            if sev_bugs.empty:
+                st.caption("No open backlog defects in this category.")
+            else:
+                display = sev_bugs[["issue_key", "summary", "status", "bdays_open"]].copy()
+                display["url"] = display["issue_key"].apply(
+                    lambda k: f"{jira_client.JIRA_BASE_URL}/browse/{k}"
+                )
+                display = display[["url", "summary", "status", "bdays_open"]].rename(columns={
+                    "url":        "Key",
+                    "summary":    "Summary",
+                    "status":     "Status",
+                    "bdays_open": "Days Open",
+                })
+                st.dataframe(
+                    display,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Key": st.column_config.LinkColumn(
+                            "Key", display_text=r"([A-Z]+-\d+)"
+                        ),
+                    },
+                )
+
+    st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="section-title">Defect Health</div>', unsafe_allow_html=True)
     _render_health_kpis()
 
@@ -649,11 +885,16 @@ with tab2:
     # ── Planned completions section ───────────────────────────────────────────
     st.markdown('<div class="section-title">Planned Completions</div>', unsafe_allow_html=True)
 
-    ws_options = sorted(
-        open_df.loc[open_df["workstream"] != "Unassigned", "workstream"].dropna().unique().tolist()
-    )
+    ws_options = sorted({
+        part
+        for val in open_df["workstream"].dropna()
+        for part in str(val).split(", ")
+        if part and part != "Unassigned"
+    })
     sel_ws = st.multiselect("Filter by Workstream", ws_options, placeholder="All workstreams", key="ws_filter")
-    ws_df = open_df if not sel_ws else open_df[open_df["workstream"].isin(sel_ws)]
+    ws_df = open_df if not sel_ws else open_df[open_df["workstream"].apply(
+        lambda w: any(s in str(w).split(", ") for s in sel_ws)
+    )]
 
     def _next_bdays(start: date, n: int):
         days, d = [], start
@@ -680,7 +921,7 @@ with tab2:
     st.markdown('<div class="section-title">Open Defects by Planned Date &amp; Workstream</div>', unsafe_allow_html=True)
 
     upcoming_bdays = _next_bdays(today, 5)
-    range_df = open_df[open_df["planned_completion_date"].isin(upcoming_bdays)]
+    range_df = ws_df[ws_df["planned_completion_date"].isin(upcoming_bdays)]
 
     if range_df.empty:
         st.info("No open defects with planned completion dates in the next 5 business days.")
@@ -752,7 +993,9 @@ with tab2:
                 if detail.empty:
                     st.info("No defects.")
                 else:
-                    st.dataframe(detail.reset_index(drop=True), use_container_width=True, hide_index=True)
+                    st.dataframe(_add_links(detail).reset_index(drop=True),
+                                 use_container_width=True, hide_index=True,
+                                 column_config={"Key": _LINK_COL_CFG})
 
 # ─────────────────────────────────────────────────────────────────────────────
 def _build_totals_table(sec_df: pd.DataFrame, int_df: pd.DataFrame, data_df: pd.DataFrame, func_df: pd.DataFrame) -> str:
@@ -836,11 +1079,11 @@ def _build_totals_table(sec_df: pd.DataFrame, int_df: pd.DataFrame, data_df: pd.
 def _build_age_table(filtered_df: pd.DataFrame, today: date) -> str:
     WS_ORDER = ["Finance", "OTC", "Data", "LogOps", "STP", "MTI", "D&A",
                 "Sales", "PLM", "APO", "Platform", "Unassigned"]
-    DAY_COLS = [("4+ Days", lambda x: x >= 4),
-                ("3 Days",  lambda x: x == 3),
-                ("2 Days",  lambda x: x == 2),
+    DAY_COLS = [("Today",   lambda x: x == 0),
                 ("1 Day",   lambda x: x == 1),
-                ("Today",   lambda x: x == 0)]
+                ("2 Days",  lambda x: x == 2),
+                ("3 Days",  lambda x: x == 3),
+                ("4+ Days", lambda x: x >= 4)]
 
     th_style = ("background:#2d0b55;color:#e8d5ff;padding:0.4rem 0.75rem;font-size:1rem;"
                 "font-weight:700;letter-spacing:.04em;text-align:center;white-space:nowrap")
